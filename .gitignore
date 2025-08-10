@@ -1,0 +1,31 @@
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*build/
+*dist/
+*.egg-info/
+
+# Virtual environments
+.env
+.venv
+venv/
+env/
+ENV/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Data and Logs - The ledger is critical state and should NOT be in git.
+# Git is for code, not for the runtime data of your application.
+data/
+llm/adapters/
+*.log
+
+# OS-specific files
+.DS_Store
+Thumbs.db

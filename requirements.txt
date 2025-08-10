@@ -1,0 +1,9 @@
+# FastAPI framework and all standard dependencies (uvicorn, pydantic, etc.)
+
+ fastapi[all]
+ torch
+ transformers
+ peft
+ accelerate
+ bitsandbytes
+ datasets
