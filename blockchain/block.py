@@ -1,95 +1,122 @@
 # mirror_ledger/blockchain/block.py
 
+from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
-from . import utils
+from typing import Dict, Any
+from .utils import sha256_hex, deterministic_dumps, utc_iso
 
-"""
-This module defines the fundamental data structure of the Mirror Ledger: the `Block`.
-A Block serves as a "data contract" for a single, discrete event in the AI's lifecycle.
-It is meticulously designed to separate immutable, observed facts from mutable,
-human-provided feedback, which is a core concept of this research.
-
-The choice of a `dataclass` provides a modern, readable, and type-hinted structure.
-"""
 
 @dataclass
 class Block:
     """
-    Represents a single block in the Mirror Ledger. Each block is an immutable record of a
-    generation event, coupled with a mutable field for subsequent feedback.
+    A blockchain block designed for event-sourcing and clear separation between an
+    immutable core and a mutable feedback tail. This structure is central to the
+    Mirror Ledger's ability to be both auditable and adaptive.
 
-    Attributes:
-        index (int): The position of the block in the chain.
-        previous_hash (str): The hash of the preceding block, linking them cryptographically.
-        timestamp (str): The UTC timestamp of the block's creation.
+    - IMMUTABLE CORE (covered by the hash):
+        index, timestamp, previous_hash, data.
+        The `data` field contains the event payload, including the crucial `type` and
+        `trace_id` fields, which make the ledger a queryable event store.
 
-        data (Dict[str, Any]): The core, immutable data of the event. This dictionary contains
-            the "observed facts" of the AI's action (e.g., the prompt, the output, the moral
-            judgment). This data is included in the block's hash to make it tamper-proof.
+    - MUTABLE TAIL (NOT covered by the hash):
+        feedback.
+        This allows for post-facto annotations like human reviews, corrections,
+        or appeal statuses without invalidating the historical hash chain.
 
-        feedback (Dict[str, Any]): A container for mutable feedback data provided post-creation.
-            This includes user ratings, corrected text, etc. This dictionary is *explicitly excluded*
-            from the block's hash, allowing it to be updated by "smart contract" methods in the
-            Ledger without invalidating the chain's integrity.
-
-        hash (str): The cryptographic hash of the block, calculated on its immutable fields.
-            It serves as the block's unique identifier and integrity verifier.
+    The block's hash is computed deterministically from its immutable core, ensuring
+    tamper-evidence for the recorded event.
     """
     index: int
     previous_hash: str
-    timestamp: str = field(default_factory=utils.get_utc_timestamp)
-    
-    # --- Core Immutable Data ---
-    # This dictionary will be hashed.
-    data: Dict[str, Any] = field(default_factory=dict)
+    data: Dict[str, Any]
 
-    # --- Mutable Feedback Data ---
-    # This dictionary is EXCLUDED from the hash.
+    # Timestamp can be provided for back-dating or testing; otherwise, it's set at creation.
+    timestamp: str = field(default_factory=utc_iso)
+
+    # The feedback dictionary is the "mutable tail," explicitly excluded from the hash.
     feedback: Dict[str, Any] = field(default_factory=dict)
-    
+
+    # The hash is computed from the immutable core after initialization.
     hash: str = field(init=False)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """
-        This dataclass method is called automatically after the object is initialized.
-        It's the perfect place to compute the hash, as it ensures all other fields
-        have been populated.
+        Called by the dataclass constructor after all fields are initialized.
+        This is the ideal place to compute and set the block's definitive hash.
         """
-        self.hash = self._calculate_hash()
+        self.hash = self.compute_hash()
 
-    def _calculate_hash(self) -> str:
+    def core_dict(self) -> Dict[str, Any]:
         """
-        Calculates the SHA-256 hash of the block's immutable contents.
-
-        The hash is derived from the block's index, timestamp, previous hash, and a
-        deterministic serialization of its `data` dictionary. Crucially, the `feedback`
-        dictionary is omitted. This design choice is fundamental to the Mirror Ledger:
-        it allows feedback to be added later without breaking the cryptographic chain,
-        embodying the principle of an auditable but updatable record.
-
-        Returns:
-            The calculated SHA-256 hash as a hex digest.
-        """
-        # Serialize the immutable `data` dictionary into a consistent string format.
-        serialized_data = utils.serialize_block_data(self.data)
-
-        return utils.calculate_sha256_hash(
-            self.index,
-            self.previous_hash,
-            self.timestamp,
-            serialized_data
-        )
-
-    def to_dict(self) -> Dict[str, Any]:
-        """
-        Returns a dictionary representation of the block, suitable for JSON serialization.
+        Returns a dictionary containing only the fields covered by the block hash.
+        This method serves as the single source of truth for what constitutes the
+        immutable, tamper-evident part of the block.
         """
         return {
             "index": self.index,
             "timestamp": self.timestamp,
             "previous_hash": self.previous_hash,
-            "hash": self.hash,
             "data": self.data,
-            "feedback": self.feedback
         }
+
+    def compute_hash(self) -> str:
+        """
+        Computes the block's SHA-256 hash from its immutable core dictionary.
+        Uses a deterministic JSON dump to ensure consistent output.
+        """
+        core_json = deterministic_dumps(self.core_dict())
+        return sha256_hex(core_json)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """
+        Serializes the entire block, including the computed hash and the mutable
+        feedback tail, into a dictionary suitable for storage or API responses.
+        """
+        return {
+            **self.core_dict(),
+            "hash": self.hash,
+            "feedback": self.feedback,
+        }
+
+    def assert_hash_consistent(self) -> None:
+        """
+        Verifies that the block's stored hash matches a fresh computation of its
+        core data. This is a critical safety check used during chain validation.
+        Raises a ValueError if the hash is inconsistent, indicating tampering.
+        """
+        computed_hash = self.compute_hash()
+        if self.hash != computed_hash:
+            raise ValueError(
+                f"Block {self.index}: Stored hash '{self.hash}' does not match "
+                f"computed hash '{computed_hash}' of the core data."
+            )
+
+    def clone_with_feedback(self, feedback_delta: Dict[str, Any]) -> Block:
+        """
+        Creates a new, identical Block instance with updated feedback.
+
+        This pure functional approach is safer than in-place mutation. The ledger
+        can replace the old block instance with this new one. Because the immutable
+        core is identical, the original hash is preserved.
+
+        Args:
+            feedback_delta: A dictionary of new feedback to merge into the existing feedback.
+
+        Returns:
+            A new Block instance with the updated feedback.
+        """
+        # Perform a deep merge of the feedback dictionaries
+        new_feedback = dict(self.feedback or {})
+        new_feedback.update(feedback_delta or {})
+
+        # Create a new block with the same core data but new feedback
+        new_block = Block(
+            index=self.index,
+            previous_hash=self.previous_hash,
+            data=self.data,
+            timestamp=self.timestamp,
+            feedback=new_feedback,
+        )
+        # Manually set the hash to the original, as the core is unchanged.
+        new_block.hash = self.hash
+        return new_block

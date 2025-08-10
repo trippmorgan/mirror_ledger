@@ -14,7 +14,7 @@ hashing process would invalidate the chain's verifiability. Therefore, this modu
 the same block data will *always* produce the same hash.
 """
 
-def serialize_block_data(data: dict) -> str:
+def deterministic_dumps(data: dict) -> str:
     """
     Serializes a dictionary into a deterministic JSON string.
 
@@ -31,24 +31,22 @@ def serialize_block_data(data: dict) -> str:
     """
     return json.dumps(data, sort_keys=True, separators=(',', ':'))
 
-def calculate_sha256_hash(*args) -> str:
+def sha256_hex(s: str) -> str:
     """
-    Calculates a SHA-256 hash from a series of string arguments.
+    Calculates a SHA-256 hash from a given string.
 
-    This function concatenates all provided arguments into a single string and computes its SHA-256 hash.
     SHA-256 is selected for its widespread adoption, strong collision resistance, and sufficient security
     for this application's purpose of data integrity verification.
 
     Args:
-        *args: A variable number of string arguments to be included in the hash.
+        s: The string to hash.
 
     Returns:
         The hexadecimal representation of the SHA-256 hash.
     """
-    hashing_text = "".join(map(str, args))
-    return hashlib.sha256(hashing_text.encode('utf-8')).hexdigest()
+    return hashlib.sha256(s.encode('utf-8')).hexdigest()
 
-def get_utc_timestamp() -> str:
+def utc_iso() -> str:
     """
     Returns the current time as an ISO 8601 formatted string in UTC.
 

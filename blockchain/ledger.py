@@ -1,170 +1,228 @@
 # mirror_ledger/blockchain/ledger.py
 
+from __future__ import annotations
 import json
-from typing import List, Dict, Any, Optional, Tuple
-from copy import deepcopy
+from pathlib import Path
+from typing import Dict, Any, List, Iterable, Optional
 
 from .block import Block
-from . import utils
+from .utils import utc_iso
 
 """
-This module implements the `BlockchainLedger`, the high-level manager for the chain.
-It acts as the primary interface for all other system components that need to read from or
-write to the ledger. Its methods are designed as "smart contracts"—controlled functions that
-ensure the chain's rules of integrity and evolution are respected.
+This module implements the BlockchainLedger, the primary controller for the chain.
+It abstracts the complexities of block creation, validation, and persistence,
+providing a clean, "smart contract"-style API for the rest of the system.
 
-This class encapsulates the list of blocks and is responsible for foundational tasks such as
-creating the first block (the "Genesis Block") and adding subsequent blocks correctly.
+Design Choices:
+  - Storage Model: Uses a simple JSON Lines (.jsonl) file. Each line is a complete,
+    serialized block. This format is human-readable, easily auditable with standard
+    command-line tools (like `grep` or `jq`), and robust against corruption (a single
+    corrupt line doesn't invalidate the whole file).
+  - Persistence Strategy: For simplicity and safety in this prototype stage, feedback
+    updates trigger a full rewrite of the storage file (`_rewrite_file`). This is an atomic
+    operation (writing to a temporary file then replacing the original) that prevents data
+    loss if the process is interrupted. For high-throughput systems, this could be
+    optimized or replaced with a transactional database (e.g., SQLite, Postgres)
+    without changing the public API of this class.
+  - In-Memory Cache: The entire chain is held in a list (`self._chain`) for fast,
+    synchronous access and querying. The file on disk is the source of truth for
+    durability.
 """
 
 class BlockchainLedger:
     """
     Manages the collection of blocks, ensuring integrity and providing methods for
     interaction and data retrieval. It serves as the single source of truth for the
-    AI's entire history.
+    AI's entire event history.
     """
-    def __init__(self):
-        """
-        Initializes the BlockchainLedger, creating the Genesis Block which serves as
-        the anchor and moral foundation of the entire chain.
-        """
-        self.chain: List[Block] = [self._create_genesis_block()]
 
-    def _create_genesis_block(self) -> Block:
+    def __init__(self, storage_path: str = "data/blocks.jsonl", auto_bootstrap_genesis: bool = True) -> None:
         """
-        Creates the very first block in the chain (Block 0).
+        Initializes the ledger. If a storage file exists, it loads the chain from disk.
+        Otherwise, it creates the storage file and, if requested, a Genesis Block.
+        """
+        self.path = Path(storage_path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._chain: List[Block] = []
 
-        The Genesis Block is a conceptual anchor. Its data field contains the foundational
-        mission or constitution of the AI system, making the system's core purpose
-        an explicit and auditable part of its history from the very beginning.
+        if self.path.exists():
+            self._load_from_file()
+        else:
+            self.path.touch() # Create an empty file
+
+        if auto_bootstrap_genesis and not self._chain:
+            # The Genesis block's previous_hash is defined by convention as 64 zeros.
+            self.add_block(
+                data={"type": "Genesis", "message": "Mirror Ledger initialized."},
+                is_genesis=True
+            )
+
+    # --- Public API: Write Operations ---
+
+    def add_block(self, data: Dict[str, Any], feedback: Optional[Dict[str, Any]] = None, is_genesis: bool = False) -> Block:
+        """
+        Creates, validates, and appends a new block to the ledger. This is the primary
+        method for recording a new, immutable event.
+
+        Args:
+            data: The core event payload (e.g., {"type": "IntakeDrafted", "trace_id": ..., "content": ...}).
+            feedback: Optional initial feedback for the mutable tail.
+            is_genesis: A flag to handle the special case of the first block.
 
         Returns:
-            The initialized Genesis Block.
+            The newly created and persisted Block.
         """
-        genesis_data = {
-            "type": "Genesis Block",
-            "purpose": "Moral Foundation & Learning Ledger for the Mirror Ledger System.",
-            "directive": "Log all AI generation events, moral reflections, and human feedback "
-                         "to create a transparent, auditable, and adaptive learning history."
-        }
-        return Block(
-            index=0,
-            previous_hash="0",
-            timestamp=utils.get_utc_timestamp(),
-            data=genesis_data
+        if is_genesis:
+            index = 0
+            previous_hash = "0" * 64
+        else:
+            if not self._chain:
+                raise RuntimeError("Cannot add a non-genesis block to an empty chain.")
+            latest_block = self._chain[-1]
+            index = latest_block.index + 1
+            previous_hash = latest_block.hash
+
+        block = Block(
+            index=index,
+            previous_hash=previous_hash,
+            data=data,
+            feedback=feedback or {},
         )
+        self._append_to_file(block)
+        return block
+
+    def append_feedback(self, index: int, feedback_delta: Dict[str, Any]) -> Block:
+        """
+        Merges feedback into the block at `index` without changing its hash. This is the
+        core "smart contract" for adding human-in-the-loop annotations.
+
+        Args:
+            index: The index of the block to update.
+            feedback_delta: A dictionary of new feedback to merge into the existing feedback.
+
+        Returns:
+            The updated block with the merged feedback.
+
+        Raises:
+            IndexError: If the block index is out of bounds.
+        """
+        if index < 0 or index >= len(self._chain):
+            raise IndexError(f"Block index {index} out of range (0..{len(self._chain)-1})")
+
+        original_block = self._chain[index]
+        updated_block = original_block.clone_with_feedback(feedback_delta)
+
+        # Atomically update the state
+        self._chain[index] = updated_block
+        self._rewrite_file()
+        return updated_block
+
+    # --- Public API: Read and Validate Operations ---
 
     @property
-    def latest_block(self) -> Block:
-        """Returns the most recent block in the chain."""
-        return self.chain[-1]
+    def chain(self) -> List[Block]:
+        """Provides read-only access to the in-memory chain."""
+        return list(self._chain)
 
-    def add_block(self, data: Dict[str, Any]) -> Block:
+    def iter_blocks(self) -> Iterable[Block]:
+        """Returns an iterator over the blocks in the chain."""
+        return iter(self._chain)
+
+    def find_by_trace_id(self, trace_id: str) -> List[Block]:
         """
-        Mines a new block and adds it to the chain. This method is used for logging
-        new, immutable generation events.
+        Efficiently finds all blocks related to a specific workflow or event trace.
+        This is the primary method for auditing a single interaction's lifecycle.
 
         Args:
-            data: A dictionary containing the immutable data of the generation event
-                  (e.g., prompt, output, moral_judgment).
+            trace_id: The unique identifier for the trace.
 
         Returns:
-            The newly created and added block.
+            A list of all blocks sharing the given trace_id.
         """
-        latest = self.latest_block
-        new_block = Block(
-            index=latest.index + 1,
-            previous_hash=latest.hash,
-            data=data,
-            # Initialize with default pending feedback
-            feedback={"status": "pending", "rating": 0, "corrected_completion": None}
-        )
-        self.chain.append(new_block)
-        return new_block
-        
-    def add_adaptation_event(self, adapter_path: str, used_block_indices: List[int], metrics: dict) -> Block:
+        # This list comprehension is efficient for in-memory searching.
+        return [
+            b for b in self._chain
+            if isinstance(b.data, dict) and b.data.get("trace_id") == trace_id
+        ]
+
+    def validate_chain(self) -> bool:
         """
-        Adds a special block to the ledger to record a model adaptation event.
-        This provides a transparent audit trail of *how* and *why* the model evolved.
+        Performs a full integrity check of the entire blockchain.
 
-        Args:
-            adapter_path: The file path to the newly trained LoRA adapter.
-            used_block_indices: A list of block indices whose feedback was used for training.
-            metrics: A dictionary of training metrics (e.g., loss, accuracy).
+        It verifies two things for every block:
+        1.  The block's stored hash is correct (`assert_hash_consistent`).
+        2.  The block correctly points to the hash of the preceding block.
 
+        Raises:
+            ValueError: On the first detected inconsistency (hash mismatch or broken link).
         Returns:
-            The newly created adaptation event block.
+            True if the entire chain is cryptographically valid.
         """
-        adaptation_data = {
-            "type": "Adaptation Event",
-            "adapter_path": adapter_path,
-            "source_block_indices": used_block_indices,
-            "training_metrics": metrics
-        }
-        return self.add_block(adaptation_data)
-
-    def add_feedback(self, block_index: int, status: str, rating: int, corrected_completion: Optional[str]) -> bool:
-        """
-        Adds feedback to an existing block. This function acts as a "smart contract" by
-        only modifying the `feedback` field, which is explicitly not part of the hash.
-        This allows for post-facto annotation without compromising the chain's integrity.
-
-        Args:
-            block_index: The index of the block to update.
-            status: The new status (e.g., "good", "bad").
-            rating: The numerical rating (e.g., +1, -1).
-            corrected_completion: The user-provided correction, if any.
-
-        Returns:
-            True if the feedback was added successfully, False otherwise.
-        """
-        if 0 < block_index < len(self.chain):
-            self.chain[block_index].feedback["status"] = status
-            self.chain[block_index].feedback["rating"] = rating
-            if corrected_completion:
-                self.chain[block_index].feedback["corrected_completion"] = corrected_completion
+        if not self._chain:
             return True
-        return False
 
-    def find_good_examples(self, n: int = 2) -> List[Tuple[str, str]]:
+        # 1. Validate Genesis Block
+        genesis = self._chain[0]
+        genesis.assert_hash_consistent()
+        if genesis.index != 0 or genesis.previous_hash != "0" * 64:
+            raise ValueError("Genesis block is malformed.")
+
+        # 2. Validate all subsequent blocks and their links
+        for i in range(1, len(self._chain)):
+            prev_block = self._chain[i - 1]
+            curr_block = self._chain[i]
+
+            curr_block.assert_hash_consistent()
+
+            if curr_block.previous_hash != prev_block.hash:
+                raise ValueError(
+                    f"Chain link broken at Block {curr_block.index}: "
+                    f"previous_hash '{curr_block.previous_hash}' does not match "
+                    f"prior block's hash '{prev_block.hash}'."
+                )
+        return True
+
+    # --- Internal Methods: Persistence and Deserialization ---
+
+    def _load_from_file(self) -> None:
+        """Loads the chain from the .jsonl storage file into memory."""
+        self._chain.clear()
+        with self.path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                self._chain.append(self._block_from_dict(obj))
+
+    def _rewrite_file(self) -> None:
+        """Atomically rewrites the entire storage file with the current in-memory chain state."""
+        tmp_path = self.path.with_suffix(self.path.suffix + ".tmp")
+        with tmp_path.open("w", encoding="utf-8") as f:
+            for block in self._chain:
+                f.write(json.dumps(block.to_dict()) + "\n")
+        tmp_path.replace(self.path)
+
+    def _append_to_file(self, block: Block) -> None:
+        """Appends a single new block to the in-memory chain and the storage file."""
+        self._chain.append(block)
+        with self.path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(block.to_dict()) + "\n")
+
+    @staticmethod
+    def _block_from_dict(obj: Dict[str, Any]) -> Block:
         """
-        Searches the chain for the most recent high-quality examples to be used for
-        few-shot prompting. This is a key part of the learning loop.
-
-        Args:
-            n: The maximum number of examples to return.
-
-        Returns:
-            A list of (prompt, response) tuples from blocks marked as "good".
+        Rehydrates a Block object from its dictionary representation (as stored on disk).
+        It trusts the stored hash, which is later verified by `validate_chain`.
         """
-        good_examples = []
-        # Iterate backwards for recency
-        for block in reversed(self.chain):
-            if len(good_examples) >= n:
-                break
-            # Check for the explicit 'good' status from user feedback
-            if block.feedback.get("status") == "good":
-                prompt = block.data.get("prompt")
-                response = block.data.get("output_text")
-                if prompt and response:
-                    good_examples.append((prompt, response))
-        return good_examples
-
-    def to_json(self, indent: int = 4) -> str:
-        """
-        Serializes the entire blockchain to a JSON string.
-        
-        Note: We use deepcopy to avoid modifying the original chain if any
-        serialization logic were to alter the dicts.
-
-        Args:
-            indent: The indentation level for pretty-printing the JSON.
-
-        Returns:
-            A JSON string representing the entire chain.
-        """
-        return json.dumps([deepcopy(block.to_dict()) for block in self.chain], indent=indent)
-
-    def print_chain(self):
-        """A utility function to print the entire chain to the console."""
-        print(self.to_json())
+        b = Block(
+            index=int(obj["index"]),
+            previous_hash=str(obj["previous_hash"]),
+            data=obj.get("data", {}),
+            timestamp=str(obj["timestamp"]),
+            feedback=obj.get("feedback", {}),
+        )
+        # We must trust the stored hash during rehydration.
+        # The `validate_chain` method is responsible for verifying it.
+        b.hash = str(obj["hash"])
+        return b
