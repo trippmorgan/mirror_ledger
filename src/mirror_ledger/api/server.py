@@ -1,13 +1,14 @@
-# src/api/server.py
+# mirror_ledger/api/server.py
 from fastapi import FastAPI, Depends, HTTPException, Query
 from typing import List, Optional
 
-# Use absolute imports from the package root
+# Use absolute imports now that our project is an installed package
 from mirror_ledger.blockchain.ledger import BlockchainLedger
 from mirror_ledger.llm.base_model import Generator
 from mirror_ledger.llm.reflection_model import Reflector
 from mirror_ledger.adaptation.policy import SEALPolicy
 from mirror_ledger.api import schemas
+
 
 # --- Dependency Injection (now with more components) ---
 def get_ledger() -> BlockchainLedger: raise NotImplementedError()

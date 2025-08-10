@@ -1,15 +1,16 @@
-# src/api/server.py
+# mirror_ledger/api/server.py
+
 from fastapi import FastAPI, Depends, HTTPException, Query
 from typing import List, Optional
 
-# Use absolute imports from the package root
+# Use absolute imports now that our project is an installed package
 from mirror_ledger.blockchain.ledger import BlockchainLedger
 from mirror_ledger.llm.base_model import Generator
 from mirror_ledger.llm.reflection_model import Reflector
 from mirror_ledger.adaptation.policy import SEALPolicy
 from mirror_ledger.api import schemas
 
-# --- Dependency Injection (now with more components) ---
+# ... (the rest of the file is unchanged) ...
 def get_ledger() -> BlockchainLedger: raise NotImplementedError()
 def get_generator() -> Generator: raise NotImplementedError()
 def get_reflector() -> Reflector: raise NotImplementedError()
@@ -20,7 +21,6 @@ app = FastAPI(
     description="API for an event-sourced, auditable, and adaptive AI system.",
     version="0.1.0",
 )
-
 # ... (GET /chain and /block/{index} are unchanged) ...
 @app.get("/chain", response_model=schemas.ChainResponse, tags=["Blockchain"])
 def get_full_chain(trace_id: Optional[str]=Query(None, description="Filter blocks by a specific trace_id."), ledger: BlockchainLedger=Depends(get_ledger)):

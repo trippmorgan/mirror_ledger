@@ -54,7 +54,7 @@ cd mirror_ledger-main
 conda create --name mirror-ledger python=3.9 -y
 conda activate mirror-ledger
 pip install -r requirements.txt
-
+pip install -e .
 
 
 ### Running the Application

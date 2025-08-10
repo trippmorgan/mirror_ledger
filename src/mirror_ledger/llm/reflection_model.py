@@ -1,9 +1,8 @@
-# src/llm/reflection_model.py
-from typing import Dict, Any
-# Use an absolute import from the package root
-from mirror_ledger.reflection.evaluator import evaluate_output
+# mirror_ledger/llm/reflection_model.py
 
-# ... (rest of the file is identical) ...
+from typing import Dict, Any
+from ..reflection.evaluator import evaluate_output
+
 """
 (STUB) This module provides a 'Reflector' class that wraps the non-AI evaluator.
 This acts as an abstraction layer. The API server will call this Reflector.

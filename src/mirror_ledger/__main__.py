@@ -1,11 +1,12 @@
-# mirror_ledger/main.py
+# src/__main__.py
 
 import uvicorn
-from api.server import app, get_ledger, get_generator, get_reflector, get_policy
-from blockchain.ledger import BlockchainLedger
-from llm.base_model import Generator
-from llm.reflection_model import Reflector
-from adaptation.policy import SEALPolicy
+# Use absolute imports from the package root 'mirror_ledger'
+from mirror_ledger.api.server import app, get_ledger, get_generator, get_reflector, get_policy
+from mirror_ledger.blockchain.ledger import BlockchainLedger
+from mirror_ledger.llm.base_model import Generator
+from mirror_ledger.llm.reflection_model import Reflector
+from mirror_ledger.adaptation.policy import SEALPolicy
 
 # --- Component Initialization ---
 LEDGER_STORAGE_PATH = "data/master_ledger.jsonl"
@@ -29,9 +30,19 @@ app.dependency_overrides[get_reflector] = override_get_reflector
 app.dependency_overrides[get_policy] = override_get_policy
 
 # --- Application Runner ---
-if __name__ == "__main__":
+def main():
+    """Main function to run the Uvicorn server."""
     print("--- Mirror Ledger Service ---")
     print(f"Ledger storage path: '{LEDGER_STORAGE_PATH}'")
     print(f"Initial blocks loaded: {len(master_ledger.chain)}")
 
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run(
+        "mirror_ledger.api.server:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        reload_dirs=["src/mirror_ledger"]
+    )
+
+if __name__ == "__main__":
+    main()
