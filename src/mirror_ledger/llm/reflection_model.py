@@ -1,7 +1,8 @@
-# mirror_ledger/llm/reflection_model.py
-
+# src/llm/reflection_model.py
 from typing import Dict, Any
-from ..reflection.evaluator import evaluate_output
+# Use an absolute import from the package root
+from mirror_ledger.reflection.evaluator import evaluate_output
+
 
 """
 (STUB) This module provides a 'Reflector' class that wraps the non-AI evaluator.
@@ -21,3 +22,4 @@ class Reflector:
         """
         print(f"STUB: Judging payload with rule-based evaluator.")
         return evaluate_output(payload)
+

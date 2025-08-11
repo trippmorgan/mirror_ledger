@@ -63,7 +63,7 @@ With the Conda environment active, start the FastAPI server with a single comman
 
 ```bash
 python main.py```
-
+python -m mirror_ledger
 You should see output indicating that the components have been initialized and the Uvicorn server is running.
 
 

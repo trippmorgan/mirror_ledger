@@ -1,4 +1,6 @@
-# mirror_ledger/llm/base_model.py
+   # src/mirror_ledger/llm/base_model.py
+
+from typing import Optional # <-- IMPORT THIS
 
 """
 (STUB) This module will eventually contain the main LLM generator.
@@ -7,7 +9,8 @@ of a real LLM for a given task, allowing us to test the full system loop.
 """
 
 class Generator:
-    def __init__(self, model_name: str = "stub-generator", adapter_id: str | None = None):
+    # Use Optional[str] instead of str | None for Python 3.9 compatibility
+    def __init__(self, model_name: str = "stub-generator", adapter_id: Optional[str] = None):
         self.model_name = model_name
         self.adapter_id = adapter_id
         print(f"Initialized STUB Generator: {model_name} with adapter: {adapter_id}")

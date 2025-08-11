@@ -8,7 +8,11 @@ from mirror_ledger.llm.base_model import Generator
 from mirror_ledger.llm.reflection_model import Reflector
 from mirror_ledger.adaptation.policy import SEALPolicy
 from mirror_ledger.api import schemas
+import datetime
 
+def utc_iso():
+    """Return the current UTC time in ISO 8601 format."""
+    return datetime.datetime.utcnow().isoformat() + "Z"
 
 # --- Dependency Injection (now with more components) ---
 def get_ledger() -> BlockchainLedger: raise NotImplementedError()
