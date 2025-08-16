@@ -1,11 +1,11 @@
+
 from __future__ import annotations
 
 import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-
-from typing import Any, Dict, List, Tuple, Optional # <-- IMPORT Optional
+from typing import Any, Dict, List, Tuple, Optional # <-- IMPORT 'Optional'
 
 # This module simulates a LoRA fine-tune and creates a versioned adapter folder.
 # Later, you can replace `simulate_training()` with a real PEFT pipeline.
@@ -55,8 +55,8 @@ def simulate_training(base_model: str, dataset_path: str, out_dir: Path) -> Trai
         train_seconds=time.time() - t0,
     )
 
-
-def run_lora(base_model: str, dataset_path: str, parent_adapter: Optional[str] = None) -> TrainResult: # <-- FIX HERE
+# VVV --- THIS IS THE FIRST LINE WE ARE FIXING --- VVV
+def run_lora(base_model: str, dataset_path: str, parent_adapter: Optional[str] = None) -> TrainResult:
     """
     Orchestrates the simulated training and returns TrainResult.
     """
@@ -74,10 +74,10 @@ def run_lora(base_model: str, dataset_path: str, parent_adapter: Optional[str] =
 
     return result
 
-
+# VVV --- THIS IS THE SECOND LINE WE ARE FIXING --- VVV
 def write_adapter_promoted_block(
     ledger,
-    from_adapter: Optional[str], # <-- FIX HERE
+    from_adapter: Optional[str],
     to_adapter: str,
     policy_name: str,
     dataset_id: str,
@@ -102,7 +102,7 @@ def run_and_promote(
     base_model: str,
     dataset_path: str,
     policy_name: str = "SEALPolicy",
-    parent_adapter: Optional[str] = None, # <-- FIX HERE
+    parent_adapter: Optional[str] = None, # <-- AND THIS ONE
 ) -> Tuple[TrainResult, Dict[str, Any]]:
     """
     Convenience wrapper:
@@ -118,4 +118,3 @@ def run_and_promote(
         dataset_id=Path(dataset_path).name,
     )
     return result, promo
-

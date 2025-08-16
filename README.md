@@ -49,12 +49,14 @@ This project uses Conda for environment management to ensure reproducibility.
 ```bash
 git clone <your-repository-url>
 cd mirror_ledger-main
+ollama pull phi3:mini
 
 
 conda create --name mirror-ledger python=3.9 -y
 conda activate mirror-ledger
 pip install -r requirements.txt
 pip install -e .
+pip install google-generativeai
 
 
 ### Running the Application

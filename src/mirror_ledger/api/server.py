@@ -1,32 +1,83 @@
-# mirror_ledger/api/server.py
-from fastapi import FastAPI, Depends, HTTPException, Query
-from typing import List, Optional
+# src/mirror_ledger/api/server.py
 
-# Use absolute imports now that our project is an installed package
+from fastapi import FastAPI, Depends, HTTPException, Query
+from typing import Optional
+from contextlib import asynccontextmanager
+from dotenv import load_dotenv
+
+# Use absolute imports from the package root
 from mirror_ledger.blockchain.ledger import BlockchainLedger
 from mirror_ledger.llm.base_model import Generator
 from mirror_ledger.llm.reflection_model import Reflector
 from mirror_ledger.adaptation.policy import SEALPolicy
 from mirror_ledger.api import schemas
-import datetime
 
-def utc_iso():
-    """Return the current UTC time in ISO 8601 format."""
-    return datetime.datetime.utcnow().isoformat() + "Z"
+# Create a dictionary to hold our live, initialized components
+# This acts as a simple, reliable state manager for the app.
+app_state = {}
 
-# --- Dependency Injection (now with more components) ---
-def get_ledger() -> BlockchainLedger: raise NotImplementedError()
-def get_generator() -> Generator: raise NotImplementedError()
-def get_reflector() -> Reflector: raise NotImplementedError()
-def get_policy() -> SEALPolicy: raise NotImplementedError()
+# The 'lifespan' manager is the modern way to handle startup/shutdown events.
+# This code will run inside the Uvicorn worker process, solving the reloader issue.
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # --- Code to run ONCE on startup ---
+    load_dotenv()
+    print("--- Lifespan Event: Initializing Mirror Ledger Components ---")
+
+    try:
+        # Initialize all our components
+        master_ledger = BlockchainLedger(storage_path="data/master_ledger.jsonl")
+        llm_generator = Generator(model_name="phi3:mini")
+        llm_reflector = Reflector(model_name="gemini-1.5-flash")
+        adaptation_policy = SEALPolicy(feedback_threshold=3)
+
+        # Store the live components in our state dictionary
+        app_state["ledger"] = master_ledger
+        app_state["generator"] = llm_generator
+        app_state["reflector"] = llm_reflector
+        app_state["policy"] = adaptation_policy
+
+        print(f"--- Components Initialized and Ready ---")
+        print(f"Ledger has {len(master_ledger.chain)} blocks.")
+
+    except Exception as e:
+        print(f"FATAL ERROR during application startup: {e}")
+        raise e
+
+    yield # The application is now running
+
+    # --- Code to run ONCE on shutdown ---
+    print("--- Lifespan Event: Shutting down. ---")
+    app_state.clear()
+
 
 app = FastAPI(
     title="Mirror Ledger API",
     description="API for an event-sourced, auditable, and adaptive AI system.",
     version="0.1.0",
+    lifespan=lifespan # Attach the lifespan manager to the app
 )
 
-# ... (GET /chain and /block/{index} are unchanged) ...
+
+# --- Dependency Injection Functions ---
+# These have been simplified. They now fetch the initialized
+# components directly from our reliable app_state.
+def get_ledger() -> BlockchainLedger:
+    return app_state["ledger"]
+
+def get_generator() -> Generator:
+    return app_state["generator"]
+
+def get_reflector() -> Reflector:
+    return app_state["reflector"]
+
+def get_policy() -> SEALPolicy:
+    return app_state["policy"]
+
+
+# --- API Endpoints / Routes ---
+# (This section is unchanged)
+
 @app.get("/chain", response_model=schemas.ChainResponse, tags=["Blockchain"])
 def get_full_chain(trace_id: Optional[str]=Query(None, description="Filter blocks by a specific trace_id."), ledger: BlockchainLedger=Depends(get_ledger)):
     if trace_id:
@@ -44,27 +95,19 @@ def get_block_by_index(index: int, ledger: BlockchainLedger=Depends(get_ledger))
 def create_intake_event(
     request: schemas.IntakeDraftRequest,
     ledger: BlockchainLedger = Depends(get_ledger),
-    generator: Generator = Depends(get_generator),     # <-- NEW
-    reflector: Reflector = Depends(get_reflector)       # <-- NEW
+    generator: Generator = Depends(get_generator),
+    reflector: Reflector = Depends(get_reflector)
 ):
-    """
-    Full E2E Stub Flow: Generate -> Reflect -> Ledger
-    """
-    # 1. Generate content with the LLM stub
     draft_content = generator.generate_intake(
         transcript=request.content.get("transcript", ""),
         vitals=request.content.get("vitals", {})
     )
-
-    # 2. Reflect on the generated content
     evaluation = reflector.judge(draft_content)
-    if not evaluation["ok"]:
+    if not evaluation.get("ok"):
         raise HTTPException(
             status_code=400,
-            detail={"message": "Generated content violates moral constitution and was blocked.", "violations": evaluation["violations"]}
+            detail={"message": "Generated content violates moral constitution and was blocked.", "violations": evaluation.get("violations")}
         )
-
-    # 3. Log the successful event to the blockchain
     block_data = {
         "type": "IntakeDrafted",
         "trace_id": request.trace_id,
@@ -76,7 +119,6 @@ def create_intake_event(
     if initial_feedback["violations"]:
         initial_feedback["status"] = "under_review"
         initial_feedback["notes"] = "Generated with warnings."
-
     new_block = ledger.add_block(data=block_data, feedback=initial_feedback)
     return new_block
 
@@ -84,30 +126,21 @@ def create_intake_event(
 def submit_feedback(
     request: schemas.FeedbackRequest,
     ledger: BlockchainLedger = Depends(get_ledger),
-    policy: SEALPolicy = Depends(get_policy) # <-- NEW
+    policy: SEALPolicy = Depends(get_policy)
 ):
-    """
-    Submits feedback and checks the adaptation policy.
-    """
     try:
-        # Append feedback to the target block
         updated_block = ledger.append_feedback(request.block_index, request.feedback_delta)
-
-        # If feedback includes a correction, check the adaptation policy
         if "correction" in request.feedback_delta:
             if policy.record_feedback():
                 print("ADAPTATION TRIGGERED! (Stub)")
-                # In a real system, this would dispatch a background job
-                # For now, we'll just log an event to the chain.
                 ledger.add_block(data={
                     "type": "AdapterPromoted",
-                    "trace_id": f"adapt-{utc_iso()}",
+                    "trace_id": f"adapt-trigger",
                     "content": {
                         "policy": "SEALPolicy_v1_stub",
                         "message": "Adaptation triggered by feedback threshold."
                     }
                 })
-
         return updated_block
     except IndexError:
         raise HTTPException(status_code=404, detail=f"Block with index {request.block_index} not found.")
