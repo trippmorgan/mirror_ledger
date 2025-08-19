@@ -57,6 +57,7 @@ conda activate mirror-ledger
 pip install -r requirements.txt
 pip install -e .
 pip install google-generativeai
+pip install streamlit requests pandas
 
 
 ### Running the Application
@@ -67,6 +68,11 @@ With the Conda environment active, start the FastAPI server with a single comman
 python main.py```
 python -m mirror_ledger
 You should see output indicating that the components have been initialized and the Uvicorn server is running.
+
+Run the Dashboard: In a second terminal, run the Streamlit app.
+
+
+streamlit run dashboard.py
 
 
 ### How to Interact with the API
